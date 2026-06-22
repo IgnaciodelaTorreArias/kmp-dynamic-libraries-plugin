@@ -1,83 +1,77 @@
-# klib-native-extractor
+# Klib Native Dynamic Libraries Extractor
 
-Plugin de Gradle que extrae los archivos `.a` embebidos dentro de los `.klib`
-de un proyecto Kotlin Multiplatform.
+A Gradle plugin for Kotlin Multiplatform projects that automatically extracts and manages dynamic libraries packaged within `.klib` dependencies.
 
-## Por qué funciona así
+## Overview
 
-Un `.klib` es internamente un archivo ZIP. La mayoría de los klib no traen
-binarios nativos, pero algunos (típicamente klibs de cinterop que empaquetan
-una librería estática prebuilt) sí incluyen archivos `.a` bajo
-`targets/<target>/native/`. Este plugin abre cada `.klib` —tanto el que
-genera tu propio módulo como los que llegan como dependencia— y copia afuera
-cualquier entry que termine en `.a`.
+CInterop with Kotlin multiplatform doesn't support dynamic libraries in the .def file. This project imagines how this could work.
 
-## Instalación
+Advantages of dynamic libraries:
 
-### Opción A: como proyecto incluido (composite build)
+- Less ABI compatibility & toolchain match & environment match issues
+- More modularity
+- Easier access to other projects that already provide pre-compiled dynamic libraries
+- Compliment with licenses (like LGPL)
+- Resource saving when running multiple instances of the same executable that uses the dynamic library
 
-En el `settings.gradle.kts` del proyecto consumidor:
+The `.def`:
 
-```kotlin
-includeBuild("ruta/a/klib-native-extractor")
+```none
+headers = tokenizers_proto.h
+package = io.github.ignaciodelatorrearias.huggingface.tokenizers.internal.cinterop
+
+compilerOpts = -Itokenizers_proto/
+
+# Passing the dynamic libraries as if they were static libraries adds them to the linker and to the resulting .klib that gets published to maven.
+staticLibraries.mingw_x64 = tokenizers_proto.dll.lib tokenizers_proto.dll
+libraryPaths.mingw_x64 = natives/x86_64-windows/
+# Alternative:
+# The linker adds the platform suffix so it links with tokenizers_proto.dll.lib
+# linkerOpts.mingw_x64 = -Lnatives/x86_64-windows/ -ltokenizers_proto.dll
+
+staticLibraries.linux_x64 = libtokenizers_proto.so
+libraryPaths.linux_x64 = natives/x86_64-linux-gnu/
+# In linux seems like passing the dynamic library as a static one doesn't fully work so we have to pass it to the linker as arguments
+# -rpath Specify the linker that the .so should be search in the same directory as the executable or the working directory
+linkerOpts.linux_x64 = -Lnatives/x86_64-linux-gnu/ -ltokenizers_proto -rpath "$ORIGIN:."
+
+# A property like:
+dynamicLibraries = tokenizer_proto
+# should translate to the following:
+linkerOpts.mingw_x64 = -L"${project.layout.buildDirectory.dir("bin/libraries/${binary.target.konanTarget.name}")}" -ltokenizers_proto.dll
+linkerOpts.linux_x64 = -L"${project.layout.buildDirectory.dir("bin/libraries/${binary.target.konanTarget.name}")}" -ltokenizers_proto -rpath "$ORIGIN:."
+
+# The manifest of the cinterop.klib should include the dynamicLibraries and the dynamic libraries should be extracted before link tasks and copied to the output directory at the end of the link task (so the user doesn't have to worry about how and where to find the required dynamic libraries)
 ```
 
-### Opción B: publicarlo a un repositorio (mavenLocal, etc.)
+## Installation
 
-```bash
-./gradlew publishToMavenLocal
-```
-
-Y en el consumidor:
+Add the plugin to your `build.gradle.kts`:
 
 ```kotlin
-// settings.gradle.kts
-pluginManagement {
-    repositories {
-        mavenLocal()
-        gradlePluginPortal()
-    }
-}
-```
-
-## Uso en el proyecto consumidor
-
-```kotlin
-// build.gradle.kts
 plugins {
-    kotlin("multiplatform")
-    id("com.example.klib-native-extractor") version "1.0.0"
-}
-
-klibNativeExtractor {
-    outputDir.set(layout.buildDirectory.dir("nativeStaticLibs")) // opcional
-    includeDependencies.set(true) // opcional, default true
+    id("io.github.ignaciodelatorrearias.kmp-dynamic-libraries-plugin") version "0.1.0"
 }
 ```
 
-Esto registra, por cada compilación nativa (`iosX64/main`, `macosArm64/main`, etc.):
+## How It Works
 
-```
-extract<Target><Compilation>KlibNativeLibs
-```
+The plugin intercepts `KotlinNativeLink` tasks and:
 
-y una task agregadora:
+1. **Before linking**: Extracts dynamic libraries (and import libraries on Windows) from `.klib` files to `build/bin/libraries/{konanTarget}/`
+2. **During linking**: Makes these libraries available to the native linker (#TODO)
+3. **After linking**: Copies runtime libraries to the final binary directory
 
-```bash
-./gradlew extractAllKlibNativeLibs
-```
+Supported library formats by platform:
 
-Los `.a` quedan en:
+- **Windows**: `.dll`, `.dll.lib` (import library)
+- **Linux**: `.so`
+- **macOS**: `.dylib`
 
-```
-build/klibNativeLibs/<target>/<compilation>/<nombreDelKlib>/*.a
-```
+## License
 
-## Notas
+Apache License 2.0 - See LICENSE file for details
 
-- Si ningún klib trae `.a` embebido, la task simplemente no copia nada
-  (no falla).
-- `compileOnly("org.jetbrains.kotlin:kotlin-gradle-plugin:...")` en el
-  `build.gradle.kts` del plugin debe alinearse con la versión de Kotlin que
-  use el proyecto consumidor; si usás una versión de Kotlin distinta,
-  actualizá esa dependencia.
+## Author
+
+Ignacio de la Torre Arias

@@ -1,1 +1,1 @@
-rootProject.name = "klib-native-extractor"
+rootProject.name = "kmp-dynamic-libraries-plugin"
